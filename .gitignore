@@ -1,0 +1,18 @@
+# Secrets — NEVER commit
+.env
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Logs (generated at runtime)
+*.log
+
+# Backups & archives (generated at runtime)
+*.7z
+*.zip
+
+# Temp & backup files
+*.bak
+_tmp_*/
