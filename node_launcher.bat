@@ -1,64 +1,80 @@
 ﻿@echo off
-setlocal enabledelayedexpansion
+:: UA: Встановлюємо кодування UTF-8 для коректного відображення кирилиці
+chcp 65001 >nul
+setlocal
 
 :: ============================================================
-:: node_launcher.bat — GitHub-ready portable launcher
-:: Auto-detect CAPSULE_ROOT from %~dp0 (two levels up)
-:: Structure: CAPSULE_ROOT\devops\nodeupdate\node_launcher.bat
+:: NODE.JS PORTABLE MANAGER — GitHub-ready Launcher
+:: UA: Портативний лаунчер для публікації проекту на GitHub.
+::     Auto-detect CAPSULE_ROOT від %~dp0 (два рівні вгору).
+::     Без хардкодованих шляхів — працює з будь-якого розташування.
 :: ============================================================
 
-:: 1. Auto-detect CAPSULE_ROOT
-set "SCRIPT_DIR=%~dp0"
-set "SCRIPT_DIR=%SCRIPT_DIR:~0,-1%"
-for %%A in ("%SCRIPT_DIR%\..") do set "DEVOPS_DIR=%%~fA"
-for %%A in ("%DEVOPS_DIR%\..") do set "CAPSULE_ROOT=%%~fA"
-echo [INFO] Capsule: %CAPSULE_ROOT%
-
-:: 2. Locate Python
-set "PYTHON_EXE="
-for /d %%D in ("%CAPSULE_ROOT%\apps\python\current\python-*.amd64") do (
-    if exist "%%D\python.exe" set "PYTHON_EXE=%%D\python.exe"
+:: --- 1. ПЕРЕВІРКА ПРАВ АДМІНІСТРАТОРА ---
+NET SESSION >nul 2>&1
+if %errorLevel% neq 0 (
+    echo [INFO] Запит прав адміністратора...
+    powershell -Command "Start-Process '%~f0' -Verb RunAs"
+    exit /b
 )
-if not defined PYTHON_EXE (
-    if exist "%CAPSULE_ROOT%\apps\python\current\python\python.exe" (
-        set "PYTHON_EXE=%CAPSULE_ROOT%\apps\python\current\python\python.exe"
+
+:: --- 2. AUTO-DETECT CAPSULE ROOT ---
+set "LAUNCHER_DIR=%~dp0"
+if "%LAUNCHER_DIR:~-1%"=="\" set "LAUNCHER_DIR=%LAUNCHER_DIR:~0,-1%"
+
+for %%A in ("%LAUNCHER_DIR%\..") do set "DEVOPS_DIR=%%~fA"
+for %%A in ("%DEVOPS_DIR%\..") do set "CAPSULE_ROOT=%%~fA"
+
+:: --- 3. PYTHON EXE ---
+set "PYTHON_EXE=%CAPSULE_ROOT%\apps\python\current\python\python.exe"
+if not exist "%PYTHON_EXE%" (
+    where python >nul 2>&1
+    if %errorlevel% equ 0 (
+        set "PYTHON_EXE=python"
+    ) else (
+        echo [CRITICAL ERROR] Python not found at:
+        echo   %PYTHON_EXE%
+        echo.
+        echo [HINT] Переконайся що Python встановлено у:
+        echo   %CAPSULE_ROOT%\apps\python\current\python\
+        echo   Запусти: Win+R -^> python
+        pause
+        exit /b 1
     )
 )
-if not defined PYTHON_EXE (
-    where python >nul 2>&1 && set "PYTHON_EXE=python"
-)
-if not defined PYTHON_EXE (
-    echo [ERROR] Python not found. Install via Win+R -^> python
-    pause
-    exit /b 1
-)
 
-:: 3. Locate manager script
-set "MANAGER=%SCRIPT_DIR%\node_manager.py"
+:: --- 4. SCRIPT PATH ---
+set "MANAGER=%LAUNCHER_DIR%\node_manager.py"
+
+:: --- 5. ВІЗУАЛІЗАЦІЯ ---
+echo ========================================================
+echo   NODE.JS PORTABLE MANAGER (Admin Mode)
+echo   (c) Oleksii Rovnianskyi System
+echo   Root: %CAPSULE_ROOT%
+echo ========================================================
+
+:: --- 6. ПЕРЕВІРКА СКРИПТА ---
 if not exist "%MANAGER%" (
-    echo [ERROR] node_manager.py not found: %MANAGER%
+    echo [CRITICAL ERROR] Script not found at:
+    echo   %MANAGER%
     pause
     exit /b 1
 )
 
-:: 4. UAC elevation check
-net session >nul 2>&1
-if %errorlevel% neq 0 (
-    echo [INFO] Requesting administrator privileges...
-    powershell -NoProfile -Command ^
-        "Start-Process cmd -Verb RunAs -ArgumentList '/c cd /d ""%SCRIPT_DIR%"" && ""%PYTHON_EXE%"" ""%MANAGER%"" %*'"
-    exit /b 0
-)
-
-:: 5. Run manager
-echo [INFO] NODE.JS PORTABLE MANAGER (Admin Mode)
+:: --- 7. ЗАПУСК СКРИПТА ---
+echo [INFO] Запуск Python скрипта...
+cd /d "%CAPSULE_ROOT%"
 "%PYTHON_EXE%" "%MANAGER%" %*
-if %errorlevel% neq 0 (
-    echo [ERROR] Manager exited with error code %errorlevel%
+
+if %ERRORLEVEL% NEQ 0 (
+    echo.
+    echo [ERROR] Скрипт завершився з помилкою %ERRORLEVEL%.
+    echo Перевір лог-файл у: %CAPSULE_ROOT%\logs\nodelog\
     pause
-    exit /b %errorlevel%
+) else (
+    echo.
+    echo [OK] Успішно завершено.
 )
 
-echo [OK] Completed successfully.
 endlocal
 exit /b 0
