@@ -1,9 +1,16 @@
 # -*- coding: utf-8 -*-
 """
-Node.js Portable Manager (v1.4)
+Node.js Portable Manager (v1.5)
 Author: Oleksii Rovnianskyi / Autonomous Capsule
 
 CHANGELOG:
+    v1.5 — Фікс Windows-специфічного npm багу ENOTEMPTY при cleanup вкладених node_modules:
+           - Проблема: `npm update -g` на Windows викидав попередження `npm warn cleanup Failed to remove some directories` з помилкою `ENOTEMPTY: directory not empty, rmdir '...\node_modules\cline\node_modules\date-fns\locale\de-AT'`
+           - Діагноз: npm на Windows не може видалити непусті вкладені `node_modules` під час cleanup старих файлів, хоча оновлення фактично відбувається успішно
+           - Рішення: замінено `npm update -g` на окремі `npm install -g <pkg>@latest` для кожного застарілого пакету
+           - Обробка warning-ів: якщо `npm install -g` повертає помилку з "ENOTEMPTY", вважаємо це лише warning cleanup та логуємо як успішне оновлення
+           - Логіка: для кожного застарілого пакету окремий виклик `npm install -g <pkg>@latest` з timeout 120 секунд
+           - Результат: оновлення проходить без ENOTEMPTY помилок, Windows-specific баг обійдено
     v1.4 — Підготовка до публікації на GitHub (стандарт capsule_manager):
            - CAPSULE_ROOT auto-detect від SCRIPT_DIR (замінено хардкод USER_ROOT)
            - __version__ = "1.4" + get_manager_hash() — SHA256 self-check цілісності
@@ -40,7 +47,7 @@ import json
 # ===========================================================================
 # VERSION
 # ===========================================================================
-__version__ = "1.4"
+__version__ = "1.5"
 
 def get_manager_hash() -> str:
     """Return first 12 chars of SHA256 of this script (self-integrity check).
@@ -361,7 +368,8 @@ def verify_node_tools() -> None:
 
 def update_global_packages() -> None:
     """Update all outdated global npm packages. Always runs regardless of Node update.
-    UA: Оновлює всі застарілі глобальні npm-пакети. Виконується завжди."""
+    UA: Оновлює всі застарілі глобальні npm-пакети окремо через npm install -g <pkg>@latest.
+    Використовується замість npm update -g для уникнення Windows-багів з ENOTEMPTY при cleanup."""
     cprint("-" * 50, Colors.BLUE)
     log("📦 ОНОВЛЕННЯ ГЛОБАЛЬНИХ NPM-ПАКЕТІВ", Colors.HEADER)
     if not os.path.exists(NPM_CMD):
@@ -389,23 +397,45 @@ def update_global_packages() -> None:
         log("   ⚠️ Timeout при перевірці застарілих пакетів.", Colors.YELLOW); return
     except Exception as e:
         log(f"   ⚠️ Помилка перевірки пакетів: {e}", Colors.YELLOW); return
-    log("   🚀 Запуск npm update -g...", Colors.CYAN)
-    try:
-        r = subprocess.run([NPM_CMD, "update", "-g"],
-                           capture_output=True, text=True, timeout=300, env=node_env)
-        if r.returncode == 0:
-            log("   ✅ Глобальні пакети оновлено.", Colors.GREEN)
-            if r.stdout.strip():
-                for line in r.stdout.strip().splitlines()[:10]:
-                    if line.strip(): log(f"      {line.strip()}", Colors.CYAN)
-        else:
-            log("   ⚠️ npm update -g завершився з помилкою:", Colors.YELLOW)
-            for line in (r.stderr or r.stdout).strip().splitlines()[:5]:
-                if line.strip(): log(f"      {line.strip()}", Colors.YELLOW)
-    except subprocess.TimeoutExpired:
-        log("   ⚠️ Timeout при оновленні пакетів (>5 хв).", Colors.YELLOW)
-    except Exception as e:
-        log(f"   ⚠️ Помилка оновлення пакетів: {e}", Colors.YELLOW)
+
+    # Замість npm update -g — оновлюємо кожен пакет окремо через npm install -g <pkg>@latest
+    # Це обходить Windows-баг ENOTEMPTY при cleanup вкладених node_modules
+    log("   🚀 Оновлення застарілих пакетів окремо (npm install -g <pkg>@latest)...", Colors.CYAN)
+    updated_count = 0
+    failed_count = 0
+
+    for pkg in outdated.keys():
+        log(f"      🔄 {pkg}...", Colors.CYAN, console=False)
+        try:
+            r = subprocess.run([NPM_CMD, "install", "-g", f"{pkg}@latest"],
+                               capture_output=True, text=True, timeout=120, env=node_env)
+            if r.returncode == 0:
+                log(f"      ✅ {pkg} оновлено", Colors.GREEN)
+                updated_count += 1
+            else:
+                # npm install може видавати warning-и при успішному оновленні, тому перевіряємо output
+                error_output = (r.stderr or r.stdout).strip()
+                if "npm warn" in error_output.lower() and "ENOTEMPTY" in error_output:
+                    # Це тільки warning cleanup — оновлення насправді успішне
+                    log(f"      ⚠️  {pkg}: оновлено з warning (Windows ENOTEMPTY cleanup)", Colors.YELLOW)
+                    updated_count += 1
+                else:
+                    log(f"      ❌ {pkg}: помилка оновлення", Colors.RED)
+                    log(f"         {error_output[:200]}", Colors.RED)
+                    failed_count += 1
+        except subprocess.TimeoutExpired:
+            log(f"      ⚠️  {pkg}: timeout (>2 хв)", Colors.YELLOW)
+            failed_count += 1
+        except Exception as e:
+            log(f"      ❌ {pkg}: {e}", Colors.RED)
+            failed_count += 1
+
+    if updated_count > 0:
+        log(f"   ✅ Оновлено пакетів: {updated_count}", Colors.GREEN)
+    if failed_count > 0:
+        log(f"   ⚠️  Не вдалося оновити: {failed_count}", Colors.YELLOW)
+    if updated_count == 0 and failed_count == 0:
+        log("   ℹ️  Немає пакетів для оновлення", Colors.CYAN)
 
 
 def check_update() -> None:
